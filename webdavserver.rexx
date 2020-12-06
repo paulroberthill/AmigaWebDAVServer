@@ -7,7 +7,14 @@
 
 /* 
 TODO: 
-- Empty folders have a '/' file 
+- uploads
+- deletes
+
+USAGE:
+
+Windows:
+NET USE F: http://amiga
+
 */
 
 SIGNAL ON ERROR 
@@ -19,7 +26,7 @@ IF ~SHOW('L','rexxsupport.library') THEN addlib('rexxsupport.library',0,-30,0)
 
 buffersize = 32768*1600		/* Increase this as high as you can! */
 deffile = ""
-logfile = "ram:davserver.log"
+logfile = "dav:webdavserver.log"
 CRLF = "0D0A"x
 
 CALL SetStatus
@@ -27,13 +34,13 @@ code = 200
 depth = -1
 
 volumes = SHOWLIST('V',,'|')'|'
-CALL Log("===============================")
+/*CALL Log("===============================")*/
 
 Call Open(In,"Console:","R")
   hostip = "0.0.0.0" ; agent = "Unknown" ; referer = "--"
   DO UNTIL EOF(In)
     data = ReadLn(In)
-CALL Log(data)
+/*CALL Log(data)*/
     IF LENGTH(data) = 1 THEN leave
     IF INDEX(data,"GET") THEN parse var data method file protocol
     IF INDEX(data,"OPTIONS") THEN parse var data method file protocol
@@ -81,11 +88,33 @@ IF method="OPTIONS" THEN DO
 END
 
 IF method="DELETE" THEN DO
-		SAY 'HTTP/1.1 404 Not Found'
-		SAY "Server: ARexxWebServer/2.0"
-		SAY "Date: "||date()||" "||time()
-		SAY 'Content-Type: text/xml; charset="utf-8"'
-		SAY ""
+/*
+	SAY 'HTTP/1.1 404 Not Found'
+	SAY "Server: ARexxWebServer/2.0"
+	SAY "Date: "||date()||" "||time()
+	SAY 'Content-Type: text/xml; charset="utf-8"'
+	SAY ""
+*/
+
+	folder = ""
+	volume = ""
+	CALL GetFolder()
+	
+/*	CALL Log("[DELETE]" volume||folder)*/
+
+	/* Is this a file or a folder? */
+	stat = STATEF(volume||folder)
+	IF LEFT(stat, 4) = "FILE" THEN DO
+/*		CALL Log("[DELETE] FILE")*/
+		ADDRESS COMMAND 'DELETE ' volume||folder
+	END
+	ELSE DO
+/*		CALL Log("[DELETE] FOLDER")*/
+		ADDRESS COMMAND 'DELETE ' volume||folder 'ALL'
+	END
+
+
+
 
 END
 
@@ -108,6 +137,7 @@ IF method="PROPFIND" THEN DO
 		CALL GetFolder()
 
 		/* Is this a file or a folder? */
+		/* FIXME: doesn't work if a space in the path */
 		stat = STATEF(volume||folder)
 		IF LEFT(stat, 4) = "FILE" THEN DO
 			files = folder'|'
@@ -206,12 +236,9 @@ IF method="PROPFIND" THEN DO
 
 		DO UNTIL INDEX(files,'|')==0
 			PARSE VAR files fn'|'files
-			
-			CALL LOG("fn=" fn)
-			
+
 			webfn = fn
 			IF POS(" ", fn) > 0 THEN DO		
-				CALL LOG("SPACE!")
 				/* space to %20  */
 				p = POS(" ", webfn)
 				DO WHILE p > 0
@@ -219,7 +246,6 @@ IF method="PROPFIND" THEN DO
 					p = POS(" ", webfn)
 				END
 			END
-			CALL LOG("webfn=" webfn)
 
 			IF showvols = 0 THEN DO
 				state = STATEF(volume||folder||fn)	  /* dh0:xx */
@@ -246,7 +272,8 @@ IF method="PROPFIND" THEN DO
 				END
 			END
 
-			IF type="DIR" THEN DO
+			IF type="DIR" & fn ~= "" THEN DO
+/*CALL LOG("# PROPFIND [DIR]: webfn=" webfn)*/
 				SAY '  <D:response>'
 				SAY '    <D:href>http://'||hostip||'/'||webfn||'</D:href>'
 				SAY '    <D:propstat>'
@@ -294,10 +321,10 @@ IF method="PROPFIND" THEN DO
 				SAY '    </D:propstat>'
 				SAY '  </D:response>'
 			END
-			ELSE DO
+			IF type="FILE" THEN DO
+/*CALL LOG("# PROPFIND [FILE]: webfn=" webfn)*/
 				SAY '  <D:response>'
 				SAY '    <D:href>http://'||hostip||'/'||webfn'</D:href>'
-				CALL LOG ('    <D:href>http://'||hostip||'/'||webfn||'</D:href>')
 				SAY '    <D:propstat>'
 				SAY '      <D:prop>'
 				SAY '        <D:creationdate>'||year||'-'||nmonth||'-'||day||'T'||hours||':'||mins||':'||secs||'.007Z</D:creationdate>'
@@ -367,12 +394,12 @@ IF method="GET" THEN do
 	IF code = 200 THEN DO
 	  call open(in,volume||folder,'r')
 	  call open(out,'Console:','w')
-CALL LOG("start" volume||folder TIME())
+/*CALL LOG("start" volume||folder TIME())*/
 	  do until eof(in)
 		a=readch(in,buffersize)
 		call writech(out,a)
 	  end
-CALL LOG("end" volume||folder TIME())
+/*CALL LOG("end" volume||folder TIME())*/
 	  call close(in)
 	  call close(out)
 	END
@@ -459,8 +486,20 @@ if logfile~="" THEN do
 end
 return
 
+/*
+Converts a URL to a valid Amiga volume / folder
+*/
 GetFolder:
-	CALL LOG("NEW: GetFolder=" file)
+	/* Special cases */
+	IF file = "/AutoRun.inf" | file = "/Desktop.ini" THEN DO
+		SAY 'HTTP/1.1 404 Not Found'
+		SAY "Server: ARexxWebServer/2.0"
+		SAY "Date: "||date()||" "||time()
+		SAY 'Content-Type: text/xml; charset="utf-8"'
+		SAY ""
+		RETURN
+	END
+	
 	/* %20 to space */
 	p = POS("%20", file)
 	DO WHILE p > 0
@@ -492,7 +531,6 @@ GetFolder:
 		IF volpos > 0 THEN DO
 			volume = volume':'	
 			state = STATEF(volume||folder)
-CALL LOG("GetFolder state=" state "folder=" folder)
 			IF folder ~= "" THEN DO
 				IF LEFT(state, 3) = "DIR" THEN folder=folder'/'
 			END
@@ -505,17 +543,9 @@ CALL LOG("GetFolder state=" state "folder=" folder)
 		END
 	END
 	
-	CALL LOG("NEW: volume=" volume)
-	CALL LOG("NEW: folder=" folder)
+/*
+	CALL LOG("GetFolder: volume=" volume)
+	CALL LOG("GetFolder: folder=" folder)
+*/
 
 RETURN
-
-
-
-
-
-error: failure: syntax: novalue: 
-call Log('ERROR: ' ERRORTEXT(rc) 'LINE: ' sigl)
-
-
-
